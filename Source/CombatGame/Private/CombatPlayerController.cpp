@@ -20,6 +20,15 @@ ACombatPlayerController::ACombatPlayerController()
 	AmenotejikaraSphere = CreateDefaultSubobject<USphereComponent>(TEXT("AmenotejikaraTargetDetector"));
 	AmenotejikaraSphere->InitSphereRadius(AmenotejikaraRadius);
 	AmenotejikaraSphere->SetCollisionProfileName("Trigger");
+	AmenotejikaraSphere->OnComponentBeginOverlap.AddDynamic(this, &ACombatPlayerController::OnActorOverlapWithAmenotejikaraSphere);
+	AmenotejikaraSphere->OnComponentEndOverlap.AddDynamic(this, &ACombatPlayerController::OnActorEndOverlapWithAmenotejikaraSphere);
+	AmenotejikaraSphere->CanCharacterStepUpOn = ECB_No;
+
+#if WITH_EDITORONLY_DATA
+	AActor::SetActorHiddenInGame(false);
+	AmenotejikaraSphere->SetHiddenInGame(false);
+	AmenotejikaraSphere->SetOnlyOwnerSee(true);
+#endif
 }
 
 void ACombatPlayerController::OnFatalDamageTaken()
@@ -43,13 +52,40 @@ void ACombatPlayerController::SetCurrentState(ECurrentCombatPlayerState State)
 #undef ENUM_TO_STRUCT_STATE
 }
 
+void ACombatPlayerController::BeginDestroy()
+{
+	// Do not notify for overlaps when the world is being destroyed
+	if (IsPendingKill() && AmenotejikaraSphere)
+	{
+		AmenotejikaraSphere->OnComponentBeginOverlap.RemoveAll(this);
+		AmenotejikaraSphere->OnComponentEndOverlap.RemoveAll(this);
+		AmenotejikaraSphere->OnComponentBeginOverlap.Clear();
+		AmenotejikaraSphere->OnComponentEndOverlap.Clear();
+	}
+
+	Super::BeginDestroy();
+}
+
+void ACombatPlayerController::OnPossess(APawn* InPawn)
+{
+	if (!InPawn || InPawn->IsPendingKill())
+	{
+		return;
+	}
+
+	Super::OnPossess(InPawn);
+
+	AttachToActor(InPawn, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	AmenotejikaraSphere->AttachToComponent(RootComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+}
+
 void ACombatPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
 	APawn* OwnerPawn = GetPawn();
 	PlayerCamera = Cast<UCameraComponent>(OwnerPawn->GetComponentByClass(UCameraComponent::StaticClass()));
-	check(PlayerCamera, TEXT("The player class must have a UCameraComponent!"));
+	checkf(PlayerCamera, TEXT("The player class must have a UCameraComponent!"));
 
 	USceneComponent* SpringArmPrototype = PlayerCamera->GetAttachParent();
 	checkf(SpringArmPrototype, TEXT("The PlayerCamera must be attached to an USpringArmComponent!"));
@@ -80,8 +116,8 @@ void ACombatPlayerController::SetupInputComponent()
 	InputComponent->BindAxis("LookUp", this, &APlayerController::AddPitchInput);
 	InputComponent->BindAxis("LookUpRate", this, &ACombatPlayerController::LookUpAtRate);
 
-	SetCurrentState(CPS_IdleAction);
 	Super::SetupInputComponent();
+	SetCurrentState(CPS_IdleAction);
 }
 
 void ACombatPlayerController::Tick(float DeltaTime)
@@ -126,5 +162,22 @@ void ACombatPlayerController::LookUpAtRate(float Rate)
 	AddPitchInput(Rate * 45.f * GetWorld()->GetDeltaSeconds());
 }
 
+void ACombatPlayerController::OnActorOverlapWithAmenotejikaraSphere(UPrimitiveComponent*,
+                                                                    AActor* Other,
+                                                                    UPrimitiveComponent*,
+                                                                    int32,
+                                                                    bool,
+                                                                    const FHitResult&)
+{
+	AmenotejikaraPlayerState.AddActorInRange(Other);
+}
+
+void ACombatPlayerController::OnActorEndOverlapWithAmenotejikaraSphere(UPrimitiveComponent* OverlappedComponent,
+                                                                       AActor* OtherActor,
+                                                                       UPrimitiveComponent* OtherComp,
+                                                                       int32 OtherBodyIndex)
+{
+	AmenotejikaraPlayerState.RemoveActorOutOfRange(OtherActor);
+}
 
 #undef COMBAT_PLAYER_STATES

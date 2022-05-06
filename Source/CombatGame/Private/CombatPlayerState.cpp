@@ -7,6 +7,8 @@
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/Character.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogPlayerState, Warning, All);
+
 void FIdleActionState::Enter(ACombatPlayerController* Player)
 {
 }
@@ -63,7 +65,7 @@ void FAmenotejikaraActionState::Enter(ACombatPlayerController* Player)
 	EnterStateTime = ThisWorld->GetAudioTimeSeconds();
 
 	// Slow Down Time
-	ThisWorld->GetWorldSettings()->SetTimeDilation(0.05f);
+	ThisWorld->GetWorldSettings()->SetTimeDilation(TimeDilationWhenUsed);
 }
 
 void FAmenotejikaraActionState::Update(ACombatPlayerController* Player)
@@ -72,41 +74,80 @@ void FAmenotejikaraActionState::Update(ACombatPlayerController* Player)
 	check(ThisWorld);
 
 	// Either when the time runs out or the key was released prematurely
-	bool bShouldLeaveState = EnterStateTime + MaxStateTime < ThisWorld->GetAudioTimeSeconds();
+	bool bShouldLeaveState = EnterStateTime + MaxTimeInThisStateInSeconds < ThisWorld->GetAudioTimeSeconds();
 	bShouldLeaveState |= !Player->GetInputKeyTimeDown(EKeys::One);
 
 	if (bShouldLeaveState)
 	{
-		ACharacter* OwnerCharacter = Player->GetCharacter();
-		FVector CharacterBounds = OwnerCharacter->GetCapsuleComponent()->GetCollisionShape().GetExtent() * FVector(0.5f, 0.5f, 1.f);
-		FVector RayStart = OwnerCharacter->GetActorLocation() + CharacterBounds;
-		FVector RayEnd = RayStart + Player->GetAttachedCamera()->GetForwardVector() * 800;
-		
-#if WITH_EDITORONLY_DATA
-		DrawDebugLine(ThisWorld, RayStart, RayEnd, FColor::Green, false, 5, 0, 10);
-#endif
+		UE_LOG(LogPlayerState, Warning, TEXT("%d"), ActorsInRange.Num());
 
+		ACharacter* OwnerCharacter = Player->GetCharacter();
+		FVector CharacterBoundsExtent = OwnerCharacter->GetCapsuleComponent()->GetCollisionShape().GetExtent() * FVector(0.5f, 0.5f, 1.f);
+
+		FVector PlayerLocation = OwnerCharacter->GetActorLocation() + CharacterBoundsExtent;
+		FVector PlayerForward = (Player->GetAttachedCamera()->GetForwardVector() + OwnerCharacter->GetActorForwardVector()).GetUnsafeNormal();
+
+		AActor* BestToSwapPlaces = nullptr;
+		float MinimumRadiansDifference = FLT_MAX;
+		for (AActor* ActorInRange : ActorsInRange)
+		{
+			FVector ToTarget = ActorInRange->GetActorLocation() - PlayerLocation;
+
+			bool bIsFacingTarget = FVector::DotProduct(ToTarget, PlayerForward) >= 0.0f;
+			if (!bIsFacingTarget)
+			{
+				continue;
+			}
+
+#if WITH_EDITORONLY_DATA
+			DrawDebugLine(ThisWorld, PlayerLocation, ActorInRange->GetActorLocation(), FColor::Green, false, 5, 0, 10);
+#endif
+			float DotToTarget = FVector::DotProduct(ToTarget.GetSafeNormal(), PlayerForward.GetSafeNormal());
+			float RadiansToTarget = FMath::Acos(DotToTarget);
+
+			UE_LOG(LogPlayerState, Warning, TEXT("%s : %f"), *ActorInRange->GetFName().ToString(), RadiansToTarget);
+
+			if (RadiansToTarget > ToleranceToBeATargetInRadians)
+			{
+				continue;
+			}
+
+			if (RadiansToTarget >= MinimumRadiansDifference)
+			{
+				continue;
+			}
+
+			// Check if this actor isn't actually behind the already best actor
+			if (BestToSwapPlaces)
+			{
+				float CurrentDistance = FVector::DistSquared(PlayerLocation, BestToSwapPlaces->GetActorLocation());
+				float NextDistance = FVector::DistSquared(PlayerLocation, ActorInRange->GetActorLocation());
+
+				UE_LOG(LogPlayerState, Warning, TEXT("Curr: %s - %f, Next: %s - %f"), *BestToSwapPlaces->GetFName().ToString(), CurrentDistance, *ActorInRange->GetFName().ToString(), NextDistance);
+				if (CurrentDistance < NextDistance)
+				{
+					continue;
+				}
+			}
+
+			BestToSwapPlaces = ActorInRange;
+			MinimumRadiansDifference = RadiansToTarget;
+
+		}
+
+		if (BestToSwapPlaces)
+		{
+			UE_LOG(LogPlayerState, Warning, TEXT("Teleporting to %s"), *BestToSwapPlaces->GetFName().ToString());
+
+			FVector NewLocation = BestToSwapPlaces->GetActorLocation();
+
+			// Swap Positions, Preserve Rotations and Physics
+			BestToSwapPlaces->SetActorLocation(OwnerCharacter->GetActorLocation(), false, nullptr, ETeleportType::TeleportPhysics);
+			OwnerCharacter->SetActorLocation(NewLocation, false, nullptr, ETeleportType::TeleportPhysics);
+		}
 
 		// Return to the default Time
 		ThisWorld->GetWorldSettings()->SetTimeDilation(1.0f);
-
-		// Shoot Ray
-		FHitResult Result;
-		ThisWorld->LineTraceSingleByChannel(Result, RayStart, RayEnd, ECC_GameTraceChannel1);
-
-		AActor* HitActor = Result.GetActor();
-		if (HitActor)
-		{
-			FVector HitActorLocation = HitActor->GetActorLocation();
-
-			// Swap Positions, Preserve Rotations
-			if (HitActor->IsA<ACharacterBase>())
-			{
-				HitActor->SetActorLocation(OwnerCharacter->GetActorLocation(), false, nullptr, ETeleportType::TeleportPhysics);
-				OwnerCharacter->SetActorLocation(HitActorLocation, false, nullptr, ETeleportType::TeleportPhysics);
-			}
-		}
-
 		Player->SetCurrentState(CPS_IdleAction);
 	}
 }

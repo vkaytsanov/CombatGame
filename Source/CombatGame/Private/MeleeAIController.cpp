@@ -199,6 +199,7 @@ void AMeleeAIController::OnSightOverlap(UPrimitiveComponent*, AActor* Other, UPr
 
 	if (AngleToTarget < SightAngle)
 	{
+		UE_LOG(LogMeleeAIController, Warning, TEXT("Saw character %s"), *PotentialTarget->GetFName().ToString());
 		SetTarget(PotentialTarget);
 	}
 }
