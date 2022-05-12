@@ -39,8 +39,13 @@ public:
 	UPROPERTY(VisibleAnywhere, Transient)
 	float LifeStealPercent;
 public:
-	virtual void PostInitProperties() override;
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-private:
+	UCharacterStats();
+public:
 	void UpdateSecondaryStats();
+	uint32 CalculateDamageToTake(uint32 RawAmount) const;
+	virtual void PostInitProperties() override;
+
+#if WITH_EDITORONLY_DATA
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 };

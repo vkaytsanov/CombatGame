@@ -12,7 +12,7 @@ class COMBATGAME_API AWeapon : public AActor
 	GENERATED_BODY()
 public:
 	UPROPERTY(EditAnywhere)
-	class USkeletalMeshComponent* Mesh;
+	class UStaticMeshComponent* Mesh;
 
 	UPROPERTY(EditAnywhere)
 	float AttackRange = 75.f;

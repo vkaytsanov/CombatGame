@@ -17,7 +17,7 @@ public:
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<class AWeapon> WeaponTemplateClass;
 
-	UPROPERTY(VisibleAnywhere, Transient)
+	UPROPERTY(EditAnywhere)
 	class AWeapon* Weapon;
 
 	UPROPERTY(EditAnywhere)
@@ -28,5 +28,19 @@ public:
 public:
 	AMeleeCharacter();
 public:
+	virtual float GetAttackRange() const override;
+	virtual bool HasAnyCharactersToAttack() const override { return !!CharactersInWeaponRange.Num(); }
+	virtual float GetAttackCooldownSeconds() const override;
+	virtual void ExecuteAttack() override;
 	virtual void PostInitProperties() override;
+	virtual void UnPossessed() override;
+protected:
+	UFUNCTION()
+	void OnWeaponOverlap(UPrimitiveComponent* OverlappedComp, AActor* Other, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
+
+	UFUNCTION()
+	void OnWeaponEndOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+protected:
+	UPROPERTY(VisibleAnywhere)
+	TArray<ACharacterBase*> CharactersInWeaponRange;
 };

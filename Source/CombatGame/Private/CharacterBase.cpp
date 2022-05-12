@@ -3,13 +3,14 @@
 
 #include "CharacterBase.h"
 
-#include "CharacterStatsComponent.h"
-#include "CombatPlayerController.h"
+#include "CharacterStats.h"
 #include "MeleeAIController.h"
+#include "Abillities/CharacterAbillity.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundCue.h"
+
 
 // Sets default values
 ACharacterBase::ACharacterBase()
@@ -20,18 +21,28 @@ ACharacterBase::ACharacterBase()
 	USkeletalMeshComponent* OwnerMesh = GetMesh();
 	OwnerMesh->SetRelativeLocation(FVector(0, 0, -GetCapsuleComponent()->GetScaledCapsuleHalfHeight()));
 	OwnerMesh->SetRelativeRotation(FRotator(0, -90.f, 0));
-	OwnerMesh->SetCollisionObjectType(ECC_GameTraceChannel1);
 
-	StatsComponent = CreateDefaultSubobject<UCharacterStatsComponent>(TEXT("CharacterStatsComponent"));
-	StatsComponent->FatalDamageListener.BindUObject(this, &ACharacterBase::OnFatalDamageTaken);
-
-#if WITH_EDITORONLY_DATA
+	Stats = CreateDefaultSubobject<UCharacterStats>(TEXT("CharacterStats"));
+#if DEBUG_SHAPES
 	GetCapsuleComponent()->SetHiddenInGame(false);
 #endif
 }
 
+bool ACharacterBase::CanAttack() const
+{
+	UWorld* ThisWorld = GetWorld();
+	check(ThisWorld);
+
+	return LastAttackTime + GetAttackCooldownSeconds() < ThisWorld->GetTimeSeconds();
+}
+
 void ACharacterBase::TakeDamage(uint32 RawAmount)
 {
+	if (IsDead())
+	{
+		return;
+	}
+
 	UWorld* ThisWorld = GetWorld();
 	check(ThisWorld);
 
@@ -40,38 +51,83 @@ void ACharacterBase::TakeDamage(uint32 RawAmount)
 		UGameplayStatics::PlaySoundAtLocation(ThisWorld, DamagedSFX, GetActorLocation());
 	}
 
-	const uint32 TotalDamage = StatsComponent->CalculateDamageToTake(RawAmount);
+	const uint32 TotalDamage = Stats->CalculateDamageToTake(RawAmount);
 
-	StatsComponent->TakeDamage(TotalDamage);
-	OnDamageTaken_BP(TotalDamage);
-}
 
-void ACharacterBase::OnFatalDamageTaken()
-{
-	if (Controller->IsA<APlayerController>())
+	if (CurrentHealth < TotalDamage)
 	{
-		ACombatPlayerController* CombatController = Cast<ACombatPlayerController>(Controller);
-		checkf(CombatController, TEXT("PlayerController Type Mismatch"));
-		CombatController->OnFatalDamageTaken();
+		CurrentHealth = 0;
+		OnFatalDamageTaken();
 	}
 	else
 	{
-		AMeleeAIController* AIController = Cast<AMeleeAIController>(Controller);
-		checkf(AIController, TEXT("AIController Type Mismatch"));
-		// AIController->On
-		// TODO:
-		// Drop Item
-		// ..
-
-		// Give player exp
-		// ..
+		CurrentHealth -= TotalDamage;
 	}
+
+	OnDamageTaken_BP(TotalDamage);
 }
 
-
-FGenericTeamId ACharacterBase::GetGenericTeamId() const
+void ACharacterBase::OnFatalDamageTaken() const
 {
-	static const FGenericTeamId PlayerTeam(0);
-	static const FGenericTeamId AITeam(1);
-	return Controller->IsA<APlayerController>() ? PlayerTeam : AITeam;
+	check(Controller);
+
+	IKillableInterface* Killable = Cast<IKillableInterface>(Controller);
+	checkf(Killable, TEXT("The controller must implemented IKillableInterface"));
+
+	Killable->OnFatalDamageTaken();
+}
+
+void ACharacterBase::Heal(uint32 Amount)
+{
+	CurrentHealth = FMath::Min<uint32>(CurrentHealth + Amount, GetMaxHealth());
+}
+
+bool ACharacterBase::IsDead() const
+{
+	return CurrentHealth <= 0;
+}
+
+float ACharacterBase::GetAttackDamage() const
+{
+	return Stats->AttackDamage;
+}
+
+float ACharacterBase::GetCriticalStrikeChance() const
+{
+	return Stats->CriticalStrikeChance;
+}
+
+float ACharacterBase::GetLifeStealPercent() const
+{
+	return Stats->LifeStealPercent;
+}
+
+float ACharacterBase::GetMaxHealth() const
+{
+	return Stats->Health;
+}
+
+float ACharacterBase::GetCurrentHealth() const
+{
+	return CurrentHealth;
+}
+
+void ACharacterBase::BeginPlay()
+{
+	Super::BeginPlay();
+
+	Stats->UpdateSecondaryStats();
+	CurrentHealth = GetMaxHealth();
+}
+
+void ACharacterBase::PostInitProperties()
+{
+	Super::PostInitProperties();
+
+	Abillities.Empty(AbillityTemplates.Num());
+	for (TSubclassOf<UCharacterAbillity> AbillityTemplate : AbillityTemplates)
+	{
+		// Abillities.Add(NewObject<UCharacterAbillity>(GetTransientPackage(), *AbillityTemplate));
+		Abillities.Add(NewObject<UCharacterAbillity>(this, *AbillityTemplate));
+	}
 }

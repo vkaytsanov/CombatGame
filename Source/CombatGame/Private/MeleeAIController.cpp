@@ -3,6 +3,7 @@
 #include "MeleeAIController.h"
 
 #include "CharacterBase.h"
+#include "MeleeCharacter.h"
 #include "NavigationSystem.h"
 #include "Components/SphereComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -41,15 +42,15 @@ AMeleeAIController::AMeleeAIController()
 	bSetControlRotationFromPawnOrientation = true;
 
 	// Disable collision for the CONTROLLER
-	SetActorEnableCollision(false);
+	//SetActorEnableCollision(false);
 
 	HearingSphere = CreateDefaultSubobject<USphereComponent>(TEXT("HearingSphere"));
 	HearingSphere->CanCharacterStepUpOn = ECB_No;
 	HearingSphere->bDrawOnlyIfSelected = false;
 	HearingSphere->ShapeColor = FColor::Turquoise;
 	HearingSphere->bShouldCollideWhenPlacing = true;
-	HearingSphere->SetCollisionObjectType(ECC_Pawn);
-	HearingSphere->SetCollisionProfileName("Trigger");
+	HearingSphere->SetCollisionProfileName("TriggerPawn");
+	HearingSphere->SetCollisionObjectType(ECC_WorldDynamic);
 	HearingSphere->OnComponentBeginOverlap.AddDynamic(this, &AMeleeAIController::OnHearingOverlap);
 	HearingSphere->OnComponentEndOverlap.AddDynamic(this, &AMeleeAIController::OnSensesEndOverlap);
 
@@ -58,15 +59,12 @@ AMeleeAIController::AMeleeAIController()
 	SightSphere->ShapeColor = FColor::Emerald;
 	SightSphere->bShouldCollideWhenPlacing = true;
 	SightSphere->CanCharacterStepUpOn = ECB_No;
-	SightSphere->SetCollisionObjectType(ECC_Pawn);
-	SightSphere->SetCollisionProfileName("Trigger");
+	SightSphere->SetCollisionProfileName("TriggerPawn");
+	SightSphere->SetCollisionObjectType(ECC_WorldDynamic);
 	SightSphere->OnComponentBeginOverlap.AddDynamic(this, &AMeleeAIController::OnSightOverlap);
 	SightSphere->OnComponentEndOverlap.AddDynamic(this, &AMeleeAIController::OnSensesEndOverlap);
 
-
-	SetReturningHome();
-
-#if WITH_EDITORONLY_DATA
+#if DEBUG_SHAPES
 	AActor::SetHidden(false);
 	HearingSphere->bHiddenInGame = false;
 	SightSphere->bHiddenInGame = false;
@@ -82,43 +80,48 @@ void AMeleeAIController::OnPossess(APawn* InPawn)
 
 	Super::OnPossess(InPawn);
 
+	CharacterBase = Cast<ACharacterBase>(InPawn);
+
 	AttachToActor(InPawn, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
 	HearingSphere->AttachToComponent(RootComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
 	SightSphere->AttachToComponent(RootComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+
+	UCharacterMovementComponent* MovementComponent = CharacterBase->GetCharacterMovement();
+	SpawnMaxSpeed = MovementComponent->MaxWalkSpeed;
+	SpawnLocation = CharacterBase->GetActorLocation();
+
+	SetCurrentState(CES_IdleAction);
+	CurrentEnemyState->Enter(this);
 }
 
-void AMeleeAIController::SetReturningHome()
+void AMeleeAIController::OnFatalDamageTaken()
 {
-	HearingSphere->SetSphereRadius(0.0f);
-	SightSphere->SetSphereRadius(0.0f);
+	UE_LOG(LogMeleeAIController, Warning, TEXT("%s is Dead"), *CharacterBase->GetFName().ToString());
 
-	APawn* OwnerPawn = GetPawn();
-	if (OwnerPawn)
+	// TODO:
+	// Drop Item
+	// ..
+
+	// Give player exp
+	// ..
+
+	CharacterBase->Destroy();
+}
+
+void AMeleeAIController::SetCurrentState(ECurrentCombatEnemyState State)
+{
+#define ENUM_TO_STRUCT_STATE(State)                  \
+	case CES_##State##Action:                        \
+		CurrentEnemyState = &State##EnemyState;      \
+		return;
+
+	switch (State)
 	{
-		EPathFollowingRequestResult::Type RequestResult = MoveToLocation(ChaseStartLocation);
-		if (RequestResult == EPathFollowingRequestResult::RequestSuccessful)
-		{
-			UE_LOG(LogMeleeAIController, Warning, TEXT("%s is going back home at %s"), *OwnerPawn->GetFName().ToString(), *ChaseStartLocation.ToString());
-		}
+		COMBAT_ENEMY_STATE(ENUM_TO_STRUCT_STATE);
 	}
 
-	CurrentTarget = nullptr;
-}
-
-void AMeleeAIController::OnReturnedHome()
-{
-	HearingSphere->SetSphereRadius(HearingRadius);
-	SightSphere->SetSphereRadius(SightRadius);
-}
-
-void AMeleeAIController::BeginPlay()
-{
-	Super::BeginPlay();
-
-	ACharacter* OwnerCharacter = GetCharacter();
-	UCharacterMovementComponent* MovementComponent = OwnerCharacter->GetCharacterMovement();
-	SpawnMaxSpeed = MovementComponent->MaxWalkSpeed;
-	SpawnLocation = OwnerCharacter->GetActorLocation();
+	checkf(false, TEXT("This shouldn't be reached"));
+#undef ENUM_TO_STRUCT_STATE
 }
 
 void AMeleeAIController::BeginDestroy()
@@ -144,26 +147,19 @@ void AMeleeAIController::BeginDestroy()
 
 void AMeleeAIController::Tick(float DeltaSeconds)
 {
+	FCombatEnemyState* ThisFrameEnemyState = CurrentEnemyState;
+	CurrentEnemyState->Update(this);
+	if (ThisFrameEnemyState != CurrentEnemyState)
+	{
+		CurrentEnemyState->Enter(this);
+	}
+
 	Super::Tick(DeltaSeconds);
-
-	if (CurrentTarget)
-	{
-		CurrentTarget->GetCharacterMovement()->MaxWalkSpeed = SpawnMaxSpeed;
-		MoveToActor(CurrentTarget);
-		return;
-	}
-
-	if (GetPathFollowingComponent()->GetStatus() != EPathFollowingStatus::Idle)
-	{
-		return;
-	}
-
-	Wander();
 }
 
 void AMeleeAIController::OnHearingOverlap(UPrimitiveComponent*, AActor* Other, UPrimitiveComponent*, int32, bool, const FHitResult&)
 {
-	ACharacterBase* PotentialTarget = GetPlayerAsCharacterIfValid(GetPawn(), Other);
+	ACharacterBase* PotentialTarget = GetPlayerAsCharacterIfValid(CharacterBase, Other);
 	if (!PotentialTarget)
 	{
 		return;
@@ -178,23 +174,20 @@ void AMeleeAIController::OnHearingOverlap(UPrimitiveComponent*, AActor* Other, U
 
 void AMeleeAIController::OnSightOverlap(UPrimitiveComponent*, AActor* Other, UPrimitiveComponent*, int32, bool, const FHitResult&)
 {
-	ACharacter* OwnerCharacter = GetCharacter();
-
-	ACharacterBase* PotentialTarget = GetPlayerAsCharacterIfValid(OwnerCharacter, Other);
+	ACharacterBase* PotentialTarget = GetPlayerAsCharacterIfValid(CharacterBase, Other);
 	if (!PotentialTarget)
 	{
 		return;
 	}
 
-	FVector ToTarget = Other->GetActorLocation() - OwnerCharacter->GetActorLocation();
-	FVector Forward = GetPawn()->GetActorForwardVector();
+	FVector ToTarget = Other->GetActorLocation() - CharacterBase->GetActorLocation();
+	FVector Forward = CharacterBase->GetActorForwardVector();
 
-	if (FVector::DotProduct(ToTarget, Forward) < 0.0f)
+	float DotToTarget = FVector::DotProduct(ToTarget.GetSafeNormal(), Forward);
+	if (DotToTarget < 0.0f)
 	{
 		return;
 	}
-
-	float DotToTarget = FVector::DotProduct(ToTarget.GetSafeNormal(), Forward.GetSafeNormal());
 	float AngleToTarget = FMath::RadiansToDegrees(FMath::Acos(DotToTarget));
 
 	if (AngleToTarget < SightAngle)
@@ -206,10 +199,11 @@ void AMeleeAIController::OnSightOverlap(UPrimitiveComponent*, AActor* Other, UPr
 
 void AMeleeAIController::OnSensesEndOverlap(UPrimitiveComponent*, AActor* OtherActor, UPrimitiveComponent*, int32)
 {
-	ACharacterBase* PotentialTarget = GetPlayerAsCharacterIfValid(GetPawn(), OtherActor);
-	if (PotentialTarget)
+	ACharacterBase* PotentialTarget = GetPlayerAsCharacterIfValid(CharacterBase, OtherActor);
+	if (PotentialTarget && CurrentTarget == PotentialTarget)
 	{
-		SetReturningHome();
+		CurrentTarget = nullptr;
+		SetCurrentState(CES_ReturnHomeAction);
 	}
 }
 
@@ -217,32 +211,8 @@ void AMeleeAIController::SetTarget(ACharacterBase* Target)
 {
 	check(Target);
 
-	ChaseStartLocation = GetPawn()->GetNavAgentLocation();
+	ChaseStartLocation = CharacterBase->GetNavAgentLocation();
 	CurrentTarget = Target;
-}
 
-void AMeleeAIController::Wander()
-{
-	UNavigationSystemV1* NavSystem = Cast<UNavigationSystemV1>(GetWorld()->GetNavigationSystem());
-	check(NavSystem);
-
-	FNavLocation NewLocation;
-	if (!NavSystem->GetRandomPointInNavigableRadius(SpawnLocation, WanderRadius, NewLocation))
-	{
-		return;
-	}
-
-	UCharacterMovementComponent* MovementComponent = GetCharacter()->GetCharacterMovement();
-	MovementComponent->MaxWalkSpeed = 150.f;
-
-	EPathFollowingRequestResult::Type RequestResult = MoveToLocation(NewLocation.Location);
-
-	if (RequestResult == EPathFollowingRequestResult::RequestSuccessful)
-	{
-		// If the wander happens after returning back
-		if (HearingSphere->IsZeroExtent())
-		{
-			OnReturnedHome();
-		}
-	}
+	SetCurrentState(CES_ChaseAction);
 }

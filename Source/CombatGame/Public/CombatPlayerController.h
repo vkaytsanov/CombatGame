@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "CombatPlayerState.h"
+#include "Killable.h"
 #include "CombatPlayerController.generated.h"
 
 
@@ -13,11 +14,11 @@
     MACRO(Idle)                       \
     MACRO(Jump)                       \
     MACRO(Attack)                     \
-    MACRO(Amenotejikara)              \
+    MACRO(UsingAbillity)              \
 
 #define GENERATE_PLAYER_STATE_ENUMS(State) CPS_##State##Action,
 
-#define GENERATE_PLAYER_STATE_STRUCTS(State) F##State##ActionState State##PlayerState;
+#define GENERATE_PLAYER_STATE_STRUCTS(State) F##State##PlayerState State##PlayerState;
 
 enum ECurrentCombatPlayerState : uint8
 {
@@ -29,47 +30,63 @@ enum ECurrentCombatPlayerState : uint8
  * 
  */
 UCLASS()
-class COMBATGAME_API ACombatPlayerController : public APlayerController
+class COMBATGAME_API ACombatPlayerController : public APlayerController, public IKillableInterface
 {
 	GENERATED_BODY()
 public:
-	UPROPERTY(EditAnywhere)
-	float AmenotejikaraRadius = 1500.f;
-public:
 	ACombatPlayerController();
 public:
-	void OnFatalDamageTaken();
+	virtual void OnFatalDamageTaken() override;
 	void SetCurrentState(ECurrentCombatPlayerState State);
-	void MoveForward(float Value);
-	void MoveRight(float Value);
+	void UpdateMovement();
 
 	class UCameraComponent* GetAttachedCamera() const
 	{
 		check(PlayerCamera);
 		return PlayerCamera;
 	}
-	virtual void BeginDestroy() override;
+
+	class ACharacterBase* GetCharacterBase() const
+	{
+		check(OwnerPlayer);
+		return OwnerPlayer;
+	}
+
+	void SetCurrentRunningAbillity(class UCharacterAbillity* Abillity)
+	{
+		CurrentRunningAbillity = Abillity;
+	}
+
+	class UCharacterAbillity* GetCurrentRunningAbillity() const
+	{
+		return CurrentRunningAbillity;
+	}
+
+	UFUNCTION(BlueprintCallable)
+	bool IsAttacking() const;
+
+	UFUNCTION(BlueprintCallable)
+	bool ConditionalAdvanceAttack();
+
+	UFUNCTION(BlueprintCallable)
+	void OnAttackEnd_BP();
 protected:
 	virtual void OnPossess(APawn* aPawn) override;
-	virtual void BeginPlay() override;
 protected:
 	virtual void SetupInputComponent() override;
 	virtual void Tick(float DeltaTime) override;
 private:
 	void TurnAtRate(float Rate);
 	void LookUpAtRate(float Rate);
-
-	UFUNCTION()
-	void OnActorOverlapWithAmenotejikaraSphere(UPrimitiveComponent* OverlappedComp, AActor* Other, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
-
-	UFUNCTION()
-	void OnActorEndOverlapWithAmenotejikaraSphere(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
 private:
+	UPROPERTY()
+	class ACharacterBase* OwnerPlayer;
+
 	UPROPERTY()
 	class UCameraComponent* PlayerCamera;
 
-	UPROPERTY(VisibleAnywhere)
-	class USphereComponent* AmenotejikaraSphere;
+	UPROPERTY()
+	class UCharacterAbillity* CurrentRunningAbillity;
 
 	FCombatPlayerState* CurrentPlayerState;
 

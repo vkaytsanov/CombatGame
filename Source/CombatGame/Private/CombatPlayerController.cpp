@@ -7,8 +7,10 @@
 #include "MeleeCharacter.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Abillities/CharacterAbillity.h"
 #include "Components/SphereComponent.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCombatPC, Warning, All);
@@ -16,24 +18,11 @@ DEFINE_LOG_CATEGORY_STATIC(LogCombatPC, Warning, All);
 ACombatPlayerController::ACombatPlayerController()
 {
 	InputComponent = CreateDefaultSubobject<UInputComponent>(TEXT("InputComponent"));
-
-	AmenotejikaraSphere = CreateDefaultSubobject<USphereComponent>(TEXT("AmenotejikaraTargetDetector"));
-	AmenotejikaraSphere->InitSphereRadius(AmenotejikaraRadius);
-	AmenotejikaraSphere->SetCollisionProfileName("Trigger");
-	AmenotejikaraSphere->OnComponentBeginOverlap.AddDynamic(this, &ACombatPlayerController::OnActorOverlapWithAmenotejikaraSphere);
-	AmenotejikaraSphere->OnComponentEndOverlap.AddDynamic(this, &ACombatPlayerController::OnActorEndOverlapWithAmenotejikaraSphere);
-	AmenotejikaraSphere->CanCharacterStepUpOn = ECB_No;
-
-#if WITH_EDITORONLY_DATA
-	AActor::SetActorHiddenInGame(false);
-	AmenotejikaraSphere->SetHiddenInGame(false);
-	AmenotejikaraSphere->SetOnlyOwnerSee(true);
-#endif
 }
 
 void ACombatPlayerController::OnFatalDamageTaken()
 {
-	
+	// TODO;
 }
 
 void ACombatPlayerController::SetCurrentState(ECurrentCombatPlayerState State)
@@ -52,18 +41,45 @@ void ACombatPlayerController::SetCurrentState(ECurrentCombatPlayerState State)
 #undef ENUM_TO_STRUCT_STATE
 }
 
-void ACombatPlayerController::BeginDestroy()
+void ACombatPlayerController::UpdateMovement()
 {
-	// Do not notify for overlaps when the world is being destroyed
-	if (IsPendingKill() && AmenotejikaraSphere)
+	static FName MoveForward("MoveForward");
+	if (float Value = this->GetInputAxisValue(MoveForward))
 	{
-		AmenotejikaraSphere->OnComponentBeginOverlap.RemoveAll(this);
-		AmenotejikaraSphere->OnComponentEndOverlap.RemoveAll(this);
-		AmenotejikaraSphere->OnComponentBeginOverlap.Clear();
-		AmenotejikaraSphere->OnComponentEndOverlap.Clear();
+		OwnerPlayer->AddMovementInput(OwnerPlayer->GetActorForwardVector(), Value);
 	}
 
-	Super::BeginDestroy();
+	static FName MoveRight("MoveRight");
+	if (float Value = this->GetInputAxisValue(MoveRight))
+	{
+		OwnerPlayer->AddMovementInput(OwnerPlayer->GetActorRightVector(), Value);
+	}
+}
+
+bool ACombatPlayerController::IsAttacking() const
+{
+	return CurrentPlayerState == &AttackPlayerState;
+}
+
+
+bool ACombatPlayerController::ConditionalAdvanceAttack()
+{
+	// check(IsAttacking());
+
+	if (AttackPlayerState.bCanAdvanceAttackAfterNotifyForHit)
+	{
+		AttackPlayerState.bCanAdvanceAttackAfterNotifyForHit = false;
+		OwnerPlayer->ExecuteAttack();
+		return true;
+	}
+
+	return false;
+}
+
+void ACombatPlayerController::OnAttackEnd_BP()
+{
+	AttackPlayerState.bCanAdvanceAttackAfterNotifyForHit = false;
+	SetCurrentState(CPS_IdleAction);
 }
 
 void ACombatPlayerController::OnPossess(APawn* InPawn)
@@ -75,16 +91,10 @@ void ACombatPlayerController::OnPossess(APawn* InPawn)
 
 	Super::OnPossess(InPawn);
 
-	AttachToActor(InPawn, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
-	AmenotejikaraSphere->AttachToComponent(RootComponent, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
-}
+	OwnerPlayer = Cast<ACharacterBase>(InPawn);
+	checkf(OwnerPlayer, TEXT("The player class must extend ACharacterBase!"));
 
-void ACombatPlayerController::BeginPlay()
-{
-	Super::BeginPlay();
-
-	APawn* OwnerPawn = GetPawn();
-	PlayerCamera = Cast<UCameraComponent>(OwnerPawn->GetComponentByClass(UCameraComponent::StaticClass()));
+	PlayerCamera = Cast<UCameraComponent>(OwnerPlayer->GetComponentByClass(UCameraComponent::StaticClass()));
 	checkf(PlayerCamera, TEXT("The player class must have a UCameraComponent!"));
 
 	USceneComponent* SpringArmPrototype = PlayerCamera->GetAttachParent();
@@ -100,8 +110,22 @@ void ACombatPlayerController::BeginPlay()
 	SpringArm->CameraLagSpeed = 3;
 	SpringArm->CameraRotationLagSpeed = 5;
 	SpringArm->bUsePawnControlRotation = true;
+	SpringArm->bDoCollisionTest = false;
 
-	AttachToActor(OwnerPawn, FAttachmentTransformRules::KeepRelativeTransform);
+	// Will use the controller's rotation for movement
+	OwnerPlayer->bUseControllerRotationPitch = false;
+	OwnerPlayer->bUseControllerRotationRoll = false;
+	OwnerPlayer->bUseControllerRotationYaw = true;
+	OwnerPlayer->GetCharacterMovement()->bUseControllerDesiredRotation = false;
+	OwnerPlayer->GetCharacterMovement()->bOrientRotationToMovement = false;
+	OwnerPlayer->GetCharacterMovement()->RotationRate = FRotator(0, 540, 0);
+
+	AttachToActor(InPawn, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+
+	for (UCharacterAbillity* Abillity : OwnerPlayer->GetAbillities())
+	{
+		Abillity->OnPosses(this);
+	}
 }
 
 void ACombatPlayerController::SetupInputComponent()
@@ -130,24 +154,6 @@ void ACombatPlayerController::Tick(float DeltaTime)
 	}
 
 	Super::Tick(DeltaTime);
-
-}
-
-
-void ACombatPlayerController::MoveForward(float Value)
-{
-	if (Value != 0.0f)
-	{
-		GetPawn()->AddMovementInput(GetPawn()->GetActorForwardVector(), Value);
-	}
-}
-
-void ACombatPlayerController::MoveRight(float Value)
-{
-	if (Value != 0.0f)
-	{
-		GetPawn()->AddMovementInput(GetPawn()->GetActorRightVector(), Value);
-	}
 }
 
 void ACombatPlayerController::TurnAtRate(float Rate)
@@ -160,24 +166,6 @@ void ACombatPlayerController::LookUpAtRate(float Rate)
 {
 	// calculate delta for this frame from the rate information
 	AddPitchInput(Rate * 45.f * GetWorld()->GetDeltaSeconds());
-}
-
-void ACombatPlayerController::OnActorOverlapWithAmenotejikaraSphere(UPrimitiveComponent*,
-                                                                    AActor* Other,
-                                                                    UPrimitiveComponent*,
-                                                                    int32,
-                                                                    bool,
-                                                                    const FHitResult&)
-{
-	AmenotejikaraPlayerState.AddActorInRange(Other);
-}
-
-void ACombatPlayerController::OnActorEndOverlapWithAmenotejikaraSphere(UPrimitiveComponent* OverlappedComponent,
-                                                                       AActor* OtherActor,
-                                                                       UPrimitiveComponent* OtherComp,
-                                                                       int32 OtherBodyIndex)
-{
-	AmenotejikaraPlayerState.RemoveActorOutOfRange(OtherActor);
 }
 
 #undef COMBAT_PLAYER_STATES

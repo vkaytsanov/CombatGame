@@ -4,150 +4,122 @@
 #include "CombatPlayerController.h"
 #include "DrawDebugHelpers.h"
 #include "Camera/CameraComponent.h"
+#include "Abillities/CharacterAbillity.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/Character.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPlayerState, Warning, All);
 
-void FIdleActionState::Enter(ACombatPlayerController* Player)
+void FIdlePlayerState::Enter(ACombatPlayerController* Player)
 {
 }
 
-void FIdleActionState::Update(ACombatPlayerController* Player)
+void FIdlePlayerState::Update(ACombatPlayerController* Player)
 {
-	if (Player->GetInputKeyTimeDown(EKeys::SpaceBar))
+	if (Player->IsInputKeyDown(EKeys::SpaceBar))
 	{
 		Player->SetCurrentState(CPS_JumpAction);
 	}
-	else if (Player->GetInputKeyTimeDown(EKeys::LeftMouseButton))
+	else if (Player->IsInputKeyDown(EKeys::LeftMouseButton))
 	{
-		Player->SetCurrentState(CPS_AttackAction);
+		ACharacterBase* OwnerPlayer = Player->GetCharacterBase();
+		if (OwnerPlayer->CanAttack())
+		{
+			Player->SetCurrentState(CPS_AttackAction);
+		}
 	}
-	else if (Player->GetInputKeyTimeDown(EKeys::One))
+	else
 	{
-		Player->SetCurrentState(CPS_AmenotejikaraAction);
+		const TArray<UCharacterAbillity*>& Abillities = Player->GetCharacterBase()->GetAbillities();
+		for (UCharacterAbillity* Abillity : Abillities)
+		{
+			if (Abillity->IsExecutable() & Player->IsInputKeyDown(Abillity->ActivationKey))
+			{
+				Player->SetCurrentRunningAbillity(Abillity);
+				Player->SetCurrentState(CPS_UsingAbillityAction);
+				break;
+			}
+		}
 	}
 
-	Player->MoveForward(Player->GetInputAxisValue(FName("MoveForward")));
-	Player->MoveRight(Player->GetInputAxisValue(FName("MoveRight")));
+	Player->UpdateMovement();
 }
 
-void FJumpActionState::Enter(ACombatPlayerController* Player)
+void FJumpPlayerState::Enter(ACombatPlayerController* Player)
 {
 	ACharacter* OwnerCharacter = Player->GetCharacter();
 	OwnerCharacter->Jump();
 }
 
-void FJumpActionState::Update(ACombatPlayerController* Player)
+void FJumpPlayerState::Update(ACombatPlayerController* Player)
 {
 	ACharacter* OwnerCharacter = Player->GetCharacter();
-
 	if (!OwnerCharacter->bWasJumping)
 	{
 		Player->SetCurrentState(CPS_IdleAction);
 	}
 }
 
-void FAttackActionState::Enter(ACombatPlayerController* Player) {}
-
-void FAttackActionState::Update(ACombatPlayerController* Player)
+void FAttackPlayerState::Enter(ACombatPlayerController* Player)
 {
-	// TODO: Temp
-	Player->SetCurrentState(CPS_IdleAction);
+	Player->GetCharacterBase()->OnAttackStart_BP();
 }
 
-void FAmenotejikaraActionState::Enter(ACombatPlayerController* Player)
+void FAttackPlayerState::Update(ACombatPlayerController* Player)
 {
-	UWorld* ThisWorld = Player->GetWorld();
-	check(ThisWorld);
-
-	// AudioTime is NOT Dilated and is paused when the game is Paused
-	EnterStateTime = ThisWorld->GetAudioTimeSeconds();
-
-	// Slow Down Time
-	ThisWorld->GetWorldSettings()->SetTimeDilation(TimeDilationWhenUsed);
-}
-
-void FAmenotejikaraActionState::Update(ACombatPlayerController* Player)
-{
-	UWorld* ThisWorld = Player->GetWorld();
-	check(ThisWorld);
-
-	// Either when the time runs out or the key was released prematurely
-	bool bShouldLeaveState = EnterStateTime + MaxTimeInThisStateInSeconds < ThisWorld->GetAudioTimeSeconds();
-	bShouldLeaveState |= !Player->GetInputKeyTimeDown(EKeys::One);
-
-	if (bShouldLeaveState)
+	if (Player->IsInputKeyDown(EKeys::LeftMouseButton))
 	{
-		UE_LOG(LogPlayerState, Warning, TEXT("%d"), ActorsInRange.Num());
+		bCanAdvanceAttackAfterNotifyForHit = true;
+	}
+}
 
-		ACharacter* OwnerCharacter = Player->GetCharacter();
-		FVector CharacterBoundsExtent = OwnerCharacter->GetCapsuleComponent()->GetCollisionShape().GetExtent() * FVector(0.5f, 0.5f, 1.f);
+void FUsingAbillityPlayerState::Enter(ACombatPlayerController* Player)
+{
+	UCharacterAbillity* CurrentAbillity = Player->GetCurrentRunningAbillity();
+	check(CurrentAbillity);
 
-		FVector PlayerLocation = OwnerCharacter->GetActorLocation() + CharacterBoundsExtent;
-		FVector PlayerForward = (Player->GetAttachedCamera()->GetForwardVector() + OwnerCharacter->GetActorForwardVector()).GetUnsafeNormal();
+	CurrentAbillity->StartExecution(Player);
+}
 
-		AActor* BestToSwapPlaces = nullptr;
-		float MinimumRadiansDifference = FLT_MAX;
-		for (AActor* ActorInRange : ActorsInRange)
+void FUsingAbillityPlayerState::Update(ACombatPlayerController* Player)
+{
+	UCharacterAbillity* CurrentAbillity = Player->GetCurrentRunningAbillity();
+	check(CurrentAbillity);
+
+	if (CurrentAbillity->bCanMoveWhenExecuting)
+	{
+		Player->UpdateMovement();
+	}
+
+	if (CurrentAbillity->bCanAttackWhenExecuting)
+	{
+		if (Player->IsInputKeyDown(EKeys::LeftMouseButton))
 		{
-			FVector ToTarget = ActorInRange->GetActorLocation() - PlayerLocation;
-
-			bool bIsFacingTarget = FVector::DotProduct(ToTarget, PlayerForward) >= 0.0f;
-			if (!bIsFacingTarget)
+			ACharacterBase* OwnerPlayer = Player->GetCharacterBase();
+			if (OwnerPlayer->CanAttack())
 			{
-				continue;
+				Player->SetCurrentState(CPS_AttackAction);
 			}
-
-#if WITH_EDITORONLY_DATA
-			DrawDebugLine(ThisWorld, PlayerLocation, ActorInRange->GetActorLocation(), FColor::Green, false, 5, 0, 10);
-#endif
-			float DotToTarget = FVector::DotProduct(ToTarget.GetSafeNormal(), PlayerForward.GetSafeNormal());
-			float RadiansToTarget = FMath::Acos(DotToTarget);
-
-			UE_LOG(LogPlayerState, Warning, TEXT("%s : %f"), *ActorInRange->GetFName().ToString(), RadiansToTarget);
-
-			if (RadiansToTarget > ToleranceToBeATargetInRadians)
-			{
-				continue;
-			}
-
-			if (RadiansToTarget >= MinimumRadiansDifference)
-			{
-				continue;
-			}
-
-			// Check if this actor isn't actually behind the already best actor
-			if (BestToSwapPlaces)
-			{
-				float CurrentDistance = FVector::DistSquared(PlayerLocation, BestToSwapPlaces->GetActorLocation());
-				float NextDistance = FVector::DistSquared(PlayerLocation, ActorInRange->GetActorLocation());
-
-				UE_LOG(LogPlayerState, Warning, TEXT("Curr: %s - %f, Next: %s - %f"), *BestToSwapPlaces->GetFName().ToString(), CurrentDistance, *ActorInRange->GetFName().ToString(), NextDistance);
-				if (CurrentDistance < NextDistance)
-				{
-					continue;
-				}
-			}
-
-			BestToSwapPlaces = ActorInRange;
-			MinimumRadiansDifference = RadiansToTarget;
-
 		}
+	}
 
-		if (BestToSwapPlaces)
+	if (CurrentAbillity->bCanJumpWhenExecuting)
+	{
+		if (Player->IsInputKeyDown(EKeys::SpaceBar))
 		{
-			UE_LOG(LogPlayerState, Warning, TEXT("Teleporting to %s"), *BestToSwapPlaces->GetFName().ToString());
-
-			FVector NewLocation = BestToSwapPlaces->GetActorLocation();
-
-			// Swap Positions, Preserve Rotations and Physics
-			BestToSwapPlaces->SetActorLocation(OwnerCharacter->GetActorLocation(), false, nullptr, ETeleportType::TeleportPhysics);
-			OwnerCharacter->SetActorLocation(NewLocation, false, nullptr, ETeleportType::TeleportPhysics);
+			Player->GetCharacterBase()->Jump();
 		}
+	}
 
-		// Return to the default Time
-		ThisWorld->GetWorldSettings()->SetTimeDilation(1.0f);
+	bool bIsUserStopped = CurrentAbillity->IsTargetable() & !Player->IsInputKeyDown(CurrentAbillity->ActivationKey);
+	if (CurrentAbillity->HasFinishedExecution() | bIsUserStopped)
+	{
+		CurrentAbillity->FinishExecution(Player);
+		Player->SetCurrentRunningAbillity(nullptr);
 		Player->SetCurrentState(CPS_IdleAction);
+	}
+	else
+	{
+		CurrentAbillity->Update(Player);
 	}
 }
