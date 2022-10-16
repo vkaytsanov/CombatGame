@@ -64,7 +64,7 @@ bool ACombatPlayerController::IsAttacking() const
 
 bool ACombatPlayerController::ConditionalAdvanceAttack()
 {
-	// check(IsAttacking());
+	check(IsAttacking());
 
 	if (AttackPlayerState.bCanAdvanceAttackAfterNotifyForHit)
 	{
@@ -72,7 +72,6 @@ bool ACombatPlayerController::ConditionalAdvanceAttack()
 		OwnerPlayer->ExecuteAttack();
 		return true;
 	}
-
 	return false;
 }
 
@@ -84,11 +83,6 @@ void ACombatPlayerController::OnAttackEnd_BP()
 
 void ACombatPlayerController::OnPossess(APawn* InPawn)
 {
-	if (!InPawn || InPawn->IsPendingKill())
-	{
-		return;
-	}
-
 	Super::OnPossess(InPawn);
 
 	OwnerPlayer = Cast<ACharacterBase>(InPawn);

@@ -67,7 +67,7 @@ void FAttackPlayerState::Enter(ACombatPlayerController* Player)
 
 void FAttackPlayerState::Update(ACombatPlayerController* Player)
 {
-	if (Player->IsInputKeyDown(EKeys::LeftMouseButton))
+	if (Player->WasInputKeyJustPressed(EKeys::LeftMouseButton))
 	{
 		bCanAdvanceAttackAfterNotifyForHit = true;
 	}

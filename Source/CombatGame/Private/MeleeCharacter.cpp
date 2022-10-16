@@ -33,20 +33,12 @@ AMeleeCharacter::AMeleeCharacter()
 
 float AMeleeCharacter::GetAttackRange() const
 {
-	if (Weapon)
-	{
-		return Weapon->AttackRange;
-	}
-	return 60.0f;
+	return Weapon ? Weapon->AttackRange : GetDefaultAttackRange();
 }
 
 float AMeleeCharacter::GetAttackCooldownSeconds() const
 {
-	if (Weapon)
-	{
-		return Weapon->AttackCooldown;
-	}
-	return 2.0f;
+	return Weapon ? Weapon->AttackCooldown : GetDefaultAttackCooldown();
 }
 
 void AMeleeCharacter::ExecuteAttack()
@@ -59,13 +51,8 @@ void AMeleeCharacter::ExecuteAttack()
 		ACharacterBase* Character = CharactersInWeaponRange[i];
 		bool bIsCritical = GetCriticalStrikeChance() >= (FMath::FRand() * 100);
 		float CurrentDamage = BaseDamage + BaseDamage * bIsCritical;
-		UE_LOG(LogMeleeCharacter, Log, TEXT("%s did %hs Attack On %s, Damage %f"), *GetFName().ToString(), bIsCritical ? "Critical" : "Normal", *Character->GetFName().ToString(), CurrentDamage);
+		UE_LOG(LogMeleeCharacter, Log, TEXT("%s did %hs Attack On %s, Damage %f"), *GetName(), bIsCritical ? "Critical" : "Normal", *Character->GetName(), CurrentDamage);
 		Character->TakeDamage(CurrentDamage);
-	}
-
-	if (CharactersInWeaponRange.Num())
-	{
-		bIsInCombat = true;
 	}
 }
 
@@ -74,7 +61,7 @@ void AMeleeCharacter::PostInitProperties()
 	Super::PostInitProperties();
 
 	float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
-	float WeaponRange = 60.0f;
+	float WeaponRange = GetDefaultAttackRange();
 
 	if (WeaponTemplateClass)
 	{
@@ -91,7 +78,6 @@ void AMeleeCharacter::PostInitProperties()
 		if (!Weapon)
 		{
 			USkeletalMeshComponent* ActorMesh = GetMesh();
-
 			const USkeletalMeshSocket* WeaponSocket = ActorMesh->GetSocketByName(WeaponSocketName);
 			if (!WeaponSocket)
 			{
@@ -112,7 +98,12 @@ void AMeleeCharacter::PostInitProperties()
 		WeaponRange = Weapon->AttackRange;
 	}
 
-	WeaponAABB->InitBoxExtent(FVector(WeaponRange, WeaponRange, WeaponRange));
+	if (!WeaponAABB)
+	{
+		WeaponAABB = NewObject<UBoxComponent>(this, TEXT("WeaponAABB"));
+	}
+
+	WeaponAABB->InitBoxExtent(FVector(WeaponRange));
 	WeaponAABB->SetRelativeLocation(FVector(CapsuleRadius * 2, 0, 0));
 }
 
@@ -123,6 +114,16 @@ void AMeleeCharacter::UnPossessed()
 	{
 		Weapon->Destroy();
 	}
+}
+
+float AMeleeCharacter::GetDefaultAttackCooldown()
+{
+	return 2.0f;
+}
+
+float AMeleeCharacter::GetDefaultAttackRange()
+{
+	return 60.0f;
 }
 
 void AMeleeCharacter::OnWeaponOverlap(UPrimitiveComponent*,

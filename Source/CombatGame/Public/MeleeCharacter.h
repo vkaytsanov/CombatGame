@@ -34,6 +34,9 @@ public:
 	virtual void ExecuteAttack() override;
 	virtual void PostInitProperties() override;
 	virtual void UnPossessed() override;
+
+	static float GetDefaultAttackCooldown();
+	static float GetDefaultAttackRange();
 protected:
 	UFUNCTION()
 	void OnWeaponOverlap(UPrimitiveComponent* OverlappedComp, AActor* Other, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);

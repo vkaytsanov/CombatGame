@@ -68,6 +68,4 @@ protected:
 	uint32 CurrentHealth;
 
 	float LastAttackTime = FLT_MIN;
-
-	uint32 bIsInCombat;
 };
